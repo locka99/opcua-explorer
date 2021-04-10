@@ -1,6 +1,6 @@
 [package]
 name = "opcua-explorer"
-version = "0.9.0" # OPCUARustVersion
+version = "0.1.0"
 description = "OPC UA Explorer Graphical Client"
 authors = ["Adam Lock <locka99@gmail.com>"]
 homepage = "https://github.com/locka99/opcua"
@@ -15,7 +15,7 @@ appveyor = { repository = "locka99/opcua" }
 
 [dependencies]
 pico-args = "0.3"
-opcua-client = { git = "https://github.com/locka99/opcua.git" }
+opcua-client = { git = "https://github.com/locka99/opcua.git", rev = "master" }
 
 [dependencies.gtk]
 version = "0.9.0"
