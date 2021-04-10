@@ -15,7 +15,11 @@ appveyor = { repository = "locka99/opcua" }
 
 [dependencies]
 pico-args = "0.3"
-opcua-client = { git = "https://github.com/locka99/opcua.git", rev = "master" }
+
+[dependencies.opcua-client]
+# Checkout OPC UA for Rust next to this project.
+path = "../opcua/client"
+version = "0.9.0" # OPCUARustVersion
 
 [dependencies.gtk]
 version = "0.9.0"
