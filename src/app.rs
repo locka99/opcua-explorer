@@ -3,16 +3,44 @@ use std::rc::Rc;
 use glib::clone;
 use gtk::{self, prelude::*};
 
-use opcua_client::prelude::*;
+use riker::actors::*;
 
-use crate::app_model::AppModel;
+use crate::model::{Model, ModelMessage};
 use crate::new_connection_dlg::NewConnectionDlg;
 
+#[derive(Debug, Clone)]
+pub enum AppMessage {
+    Console(String),
+}
+
+#[derive(Debug, Clone)]
+struct AppActor {}
+
+impl Actor for AppActor {
+    type Msg = AppMessage;
+
+    fn recv(&mut self, _ctx: &Context<AppMessage>, msg: AppMessage, _sender: Sender) {
+        match msg {
+            AppMessage::Console(msg) => {
+                println!("Received: {}", msg);
+            }
+        }
+    }
+}
+
+impl Default for AppActor {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
 pub struct App {
+    actor_system: ActorSystem,
     builder: Rc<gtk::Builder>,
-    model: Rc<AppModel>,
+    model: ActorRef<ModelMessage>,
     toolbar_connect_btn: Rc<gtk::ToolButton>,
     toolbar_disconnect_btn: Rc<gtk::ToolButton>,
+    console_text_view: Rc<gtk::TextView>,
 }
 
 impl App {
@@ -32,11 +60,23 @@ impl App {
         let toolbar_disconnect_btn: Rc<gtk::ToolButton> =
             Rc::new(builder.get_object("toolbar_disconnect_btn").unwrap());
 
+        // Log / console window
+        let console_text_view: Rc<gtk::TextView> =
+            Rc::new(builder.get_object("console_text_view").unwrap());
+
+        let actor_system = ActorSystem::new().unwrap();
+        let app_actor = actor_system.actor_of::<AppActor>("app").unwrap();
+        let model = actor_system
+            .actor_of_args::<Model, _>("model", app_actor)
+            .unwrap();
+
         let app = Rc::new(App {
+            actor_system,
             builder,
             toolbar_connect_btn,
             toolbar_disconnect_btn,
-            model: Rc::new(AppModel::new()),
+            console_text_view,
+            model,
         });
 
         // Hook up the toolbar buttons
@@ -59,10 +99,8 @@ impl App {
         // Monitored item properties pane
         // TODO
 
-        // Log / console window
-        // TODO
-
         let main_window: gtk::ApplicationWindow = app.builder.get_object("main_window").unwrap();
+
         main_window.connect_delete_event(|_, _| {
             println!("Application is closing");
             gtk::main_quit();
@@ -70,10 +108,17 @@ impl App {
         });
 
         app.update_state();
+        app.console_write("Click Connect... to connect to an OPC UA end point");
 
         main_window.show_all();
 
         gtk::main();
+    }
+    pub fn console_write(&self, message: &str) {
+        let buffer = self.console_text_view.get_buffer().unwrap();
+        let mut end_iter = buffer.get_end_iter();
+        buffer.insert(&mut end_iter, message);
+        buffer.insert(&mut end_iter, "\n");
     }
 
     pub fn on_connect_btn_clicked(&self) {
@@ -98,8 +143,7 @@ impl App {
 
         let address_space_model: gtk::TreeStore =
             self.builder.get_object("address_space_model").unwrap();
-        for i in 0..10
-        {
+        for i in 0..10 {
             let v1 = "s=1".to_value();
             let v2 = format!("Browse Name {}", i);
             let v3 = "Display Name".to_value();

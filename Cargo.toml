@@ -15,6 +15,7 @@ appveyor = { repository = "locka99/opcua" }
 
 [dependencies]
 pico-args = "0.3"
+riker = "0.4"
 
 [dependencies.opcua-client]
 # Checkout OPC UA for Rust next to this project.

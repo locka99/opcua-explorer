@@ -1,5 +1,5 @@
 mod app;
-mod app_model;
+mod model;
 mod new_connection_dlg;
 
 fn main() {
