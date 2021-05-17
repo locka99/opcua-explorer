@@ -34,6 +34,7 @@ impl Default for Connection {
 #[derive(Debug, Clone)]
 pub enum ModelMessage {
     Connect(String, SecurityPolicy, MessageSecurityMode),
+    Disconnect,
 }
 
 pub struct Model {
@@ -57,6 +58,9 @@ impl Actor for Model {
         match msg {
             ModelMessage::Connect(endpoint_url, security_policy, message_security_mode) => {
                 self.connect(&endpoint_url, security_policy, message_security_mode);
+            }
+            ModelMessage::Disconnect => {
+                self.disconnect();
             }
         }
     }
@@ -95,14 +99,36 @@ impl Model {
             identity_token,
         ) {
             Ok(session) => {
+                {
+                    let mut session = session.write().unwrap();
+                    session.set_connection_status_callback(ConnectionStatusCallback::new(
+                        |connected| {
+                            println!("Connection status change TODO");
+                        },
+                    ));
+                }
+
                 self.log("Connection succeeded");
+                self.app.tell(AppMessage::Connected, None);
                 connection.session = Some(session);
             }
             Err(err) => {
                 self.log(format!("Connection failed, status code = {}", err));
                 connection.session = None;
+                self.app.tell(AppMessage::Disconnected, None);
             }
         }
+    }
+
+    pub fn disconnect(&self) {
+        let mut connection = self.connection.lock().unwrap();
+        if let Some(ref session) = connection.session {
+            let mut session = session.write().unwrap();
+            session.disconnect();
+            self.log("Disconnecting from session");
+        }
+        connection.session = None;
+        self.app.tell(AppMessage::Disconnected, None);
     }
 
     pub fn subscribe_to_items(&self, node_ids: &[String]) {
