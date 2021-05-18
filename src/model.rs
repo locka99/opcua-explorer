@@ -35,6 +35,7 @@ impl Default for Connection {
 pub enum ModelMessage {
     Connect(String, SecurityPolicy, MessageSecurityMode),
     Disconnect,
+    BrowseNode(NodeId),
 }
 
 pub struct Model {
@@ -57,11 +58,10 @@ impl Actor for Model {
     fn recv(&mut self, _ctx: &Context<ModelMessage>, msg: ModelMessage, _sender: Sender) {
         match msg {
             ModelMessage::Connect(endpoint_url, security_policy, message_security_mode) => {
-                self.connect(&endpoint_url, security_policy, message_security_mode);
+                self.connect(&endpoint_url, security_policy, message_security_mode)
             }
-            ModelMessage::Disconnect => {
-                self.disconnect();
-            }
+            ModelMessage::Disconnect => self.disconnect(),
+            ModelMessage::BrowseNode(parent_node_id) => self.browse_node(parent_node_id),
         }
     }
 }
@@ -71,7 +71,11 @@ impl Model {
     where
         T: Into<String>,
     {
-        self.app.tell(AppMessage::Console(msg.into()), None);
+        self.send_app_msg(AppMessage::Console(msg.into()));
+    }
+
+    fn send_app_msg(&self, message: AppMessage) {
+        self.app.tell(message, None);
     }
 
     pub fn connect(
@@ -109,13 +113,13 @@ impl Model {
                 }
 
                 self.log("Connection succeeded");
-                self.app.tell(AppMessage::Connected, None);
+                self.send_app_msg(AppMessage::Connected);
                 connection.session = Some(session);
             }
             Err(err) => {
                 self.log(format!("Connection failed, status code = {}", err));
                 connection.session = None;
-                self.app.tell(AppMessage::Disconnected, None);
+                self.send_app_msg(AppMessage::Disconnected);
             }
         }
     }
@@ -128,7 +132,36 @@ impl Model {
             self.log("Disconnecting from session");
         }
         connection.session = None;
-        self.app.tell(AppMessage::Disconnected, None);
+        self.send_app_msg(AppMessage::Disconnected);
+    }
+
+    pub fn browse_node(&self, parent_node_id: NodeId) {
+        let mut connection = self.connection.lock().unwrap();
+        if let Some(ref session) = connection.session {
+            self.log(format!("Fetching children of node {}", parent_node_id));
+
+            let mut session = session.write().unwrap();
+            let browse_description = BrowseDescription {
+                node_id: parent_node_id.clone(),
+                browse_direction: BrowseDirection::Forward,
+                reference_type_id: ReferenceTypeId::Organizes.into(),
+                include_subtypes: true,
+                node_class_mask: 0xff,
+                result_mask: 0xff,
+            };
+            if let Ok(results) = session.browse(&[browse_description]) {
+                if let Some(mut results) = results {
+                    self.send_app_msg(AppMessage::BrowseNodeResult(
+                        parent_node_id,
+                        results.remove(0),
+                    ));
+                } else {
+                    self.log("Fetch failed, no results");
+                }
+            } else {
+                self.log("Fetch failed, no results")
+            }
+        }
     }
 
     pub fn subscribe_to_items(&self, node_ids: &[String]) {

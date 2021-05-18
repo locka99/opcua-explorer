@@ -7,6 +7,8 @@ use gtk::{self, prelude::*};
 
 use riker::actors::*;
 
+use opcua_client::prelude::*;
+
 use crate::model::{Model, ModelMessage};
 use crate::new_connection_dlg::NewConnectionDlg;
 
@@ -15,6 +17,7 @@ pub enum AppMessage {
     Console(String),
     Connected,
     Disconnected,
+    BrowseNodeResult(NodeId, BrowseResult),
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +140,9 @@ impl App {
                 AppMessage::Console(message) => self.console_write(&message),
                 AppMessage::Connected => self.on_connected(),
                 AppMessage::Disconnected => self.on_disconnected(),
+                AppMessage::BrowseNodeResult(parent_node_id, browse_result) => {
+                    self.on_browse_node_result(parent_node_id, browse_result)
+                }
             }
             true
         } else {
@@ -160,6 +166,9 @@ impl App {
         self.populate_address_space();
     }
 
+    pub fn on_disconnect_btn_clicked(&self) {
+        self.model.tell(ModelMessage::Disconnect, None);
+    }
     pub fn on_connected(&self) {
         self.update_connection_state(true);
         // TODO reset address soace
@@ -167,6 +176,36 @@ impl App {
 
     pub fn on_disconnected(&self) {
         self.update_connection_state(false);
+    }
+
+    pub fn on_browse_node_result(&self, parent_node_id: NodeId, browse_node_result: BrowseResult) {
+        // TODO get the parent node in the tree
+        // TODO clear any existing children
+
+        if browse_node_result.status_code.is_good() {
+            let address_space_model: gtk::TreeStore =
+                self.builder.get_object("address_space_model").unwrap();
+
+            let parent = if parent_node_id == ObjectId::RootFolder.into() {
+                None
+            } else {
+                // TODO find parent node in the tree
+                None
+            };
+
+            // This code only works for root node and needs to be fixed
+            if let Some(references) = browse_node_result.references {
+                references.iter().for_each(|r| {
+                    println!("Result = {:?}", r);
+                    let node_id = format!("{}", r.node_id);
+                    let browse_name = format!("{}", r.browse_name.name);
+                    let display_name = format!("{}", r.display_name);
+                    let t = "i=333"; //TODO
+                    let values: Vec<&dyn ToValue> = vec![&node_id, &browse_name, &display_name, &t];
+                    address_space_model.insert_with_values(parent, None, &[0, 1, 2, 3], &values);
+                });
+            }
+        }
     }
 
     pub fn clear_address_space(&self) {
@@ -177,21 +216,8 @@ impl App {
 
     pub fn populate_address_space(&self) {
         self.clear_address_space();
-
-        let address_space_model: gtk::TreeStore =
-            self.builder.get_object("address_space_model").unwrap();
-        for i in 0..10 {
-            let v1 = "s=1".to_value();
-            let v2 = format!("Browse Name {}", i);
-            let v3 = "Display Name".to_value();
-            let v4 = "i=333".to_value();
-            let values: Vec<&dyn ToValue> = vec![&v1, &v2, &v3, &v4];
-            address_space_model.insert_with_values(None, None, &[0, 1, 2, 3], &values);
-        }
-    }
-
-    pub fn on_disconnect_btn_clicked(&self) {
-        self.model.tell(ModelMessage::Disconnect, None);
+        self.model
+            .send_msg(ModelMessage::BrowseNode(ObjectId::RootFolder.into()), None);
     }
 
     pub fn update_connection_state(&self, is_connected: bool) {
