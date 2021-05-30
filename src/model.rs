@@ -136,7 +136,7 @@ impl Model {
     }
 
     pub fn browse_node(&self, parent_node_id: NodeId) {
-        let mut connection = self.connection.lock().unwrap();
+        let connection = self.connection.lock().unwrap();
         if let Some(ref session) = connection.session {
             self.log(format!("Fetching children of node {}", parent_node_id));
 

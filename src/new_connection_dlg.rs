@@ -22,7 +22,7 @@ pub(crate) struct NewConnectionDlg {
 }
 
 impl NewConnectionDlg {
-    pub fn new(model: ActorRef<ModelMessage>, builder: &gtk::Builder) -> Self {
+    pub fn new(model: ActorRef<ModelMessage>, builder: Rc<gtk::Builder>) -> Self {
         let dlg: Rc<gtk::Dialog> = Rc::new(builder.get_object("new_connection_dialog").unwrap());
 
         let connect_btn: Rc<gtk::Button> =
