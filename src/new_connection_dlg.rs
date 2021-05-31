@@ -94,6 +94,7 @@ impl NewConnectionDlgImpl {
     }
 
     pub fn show(&self) {
+        println!("Showing new connection dlg");
         // Connect the buttons
         self.dlg.run();
         self.dlg.hide();

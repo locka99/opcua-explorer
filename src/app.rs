@@ -5,7 +5,7 @@ use std::{
 };
 
 use glib::clone;
-use gtk::{self, prelude::*};
+use gtk::{self, prelude::*, TreeIter};
 
 use riker::actors::*;
 
@@ -100,55 +100,55 @@ impl App {
             actor_system,
             builder: builder.clone(),
             console_text_view,
-            toolbar_connect_btn,
-            toolbar_disconnect_btn,
-            address_space_tree,
+            toolbar_connect_btn: toolbar_connect_btn.clone(),
+            toolbar_disconnect_btn: toolbar_disconnect_btn.clone(),
+            address_space_tree: address_space_tree.clone(),
             address_space_map: HashMap::new(),
             model: model.clone(),
             rx,
         }));
 
         // Hook up the toolbar buttons
+
+        let model_connect = model.clone();
+        toolbar_connect_btn.connect_clicked(clone!(@weak app_rc, @weak builder => move |_| {
+            println!("toolbar_connect_btn click");
+            // Modally show the connect dialog
+            let dlg = NewConnectionDlg::new(model_connect.clone(), builder);
+            dlg.show();
+        }));
+
+        let model_disconnect = model.clone();
+        toolbar_disconnect_btn.connect_clicked(clone!(@weak app_rc => move |_| {
+            println!("toolbar_disconnect_btn click");
+            let app = app_rc.read().unwrap();
+            model_disconnect.tell(ModelMessage::Disconnect, None);
+        }));
+
+        // Address space
+        address_space_tree.connect_expand_collapse_cursor_row(
+            clone!(@weak app_rc => @default-return false, move |_, logical, expand, open_all| {
+                println!("address_space_tree expand");
+                let app = app_rc.read().unwrap();
+                app.on_expand_collapse_cursor_row(logical, expand, open_all);
+                true
+            }),
+        );
+
+        // Monitored item pane
+        // TODO
+
+        // Monitored item properties pane
+        // TODO
+
+        main_window.connect_delete_event(|_, _| {
+            println!("Application is closing");
+            gtk::main_quit();
+            Inhibit(false)
+        });
+
         {
             let app = app_rc.read().unwrap();
-
-            let model_connect = model.clone();
-            app.toolbar_connect_btn.connect_clicked(
-                clone!(@weak app_rc, @weak builder => move |_| {
-                    // Modally show the connect dialog
-                    let dlg = NewConnectionDlg::new(model_connect.clone(), builder);
-                    dlg.show();
-                }),
-            );
-
-            let model_disconnect = model.clone();
-            app.toolbar_disconnect_btn
-                .connect_clicked(clone!(@weak app_rc => move |_| {
-                    let app = app_rc.read().unwrap();
-                    model_disconnect.tell(ModelMessage::Disconnect, None);
-                }));
-
-            // Address space
-            app.address_space_tree.connect_expand_collapse_cursor_row(
-                clone!(@weak app_rc => @default-return false, move |_, logical, expand, open_all| {
-                    let app = app_rc.read().unwrap();
-                    app.on_expand_collapse_cursor_row(logical, expand, open_all);
-                    true
-                }),
-            );
-
-            // Monitored item pane
-            // TODO
-
-            // Monitored item properties pane
-            // TODO
-
-            main_window.connect_delete_event(|_, _| {
-                println!("Application is closing");
-                gtk::main_quit();
-                Inhibit(false)
-            });
-
             app.update_connection_state(false);
             app.console_write("Click Connect... to connect to an OPC UA end point");
         }
@@ -190,12 +190,22 @@ impl App {
         buffer.insert(&mut end_iter, "\n");
     }
 
+    pub fn on_connected(&self) {
+        self.update_connection_state(true);
+        self.populate_address_space();
+    }
+
+    pub fn on_disconnected(&self) {
+        self.update_connection_state(false);
+    }
+
     pub fn on_expand_collapse_cursor_row(
         &self,
         _logical: bool,
         expand: bool,
         _open_all: bool,
     ) -> bool {
+        println!("address space expand cursor row");
         if expand {
             // Get tree view cursor
             let (tree_path, _) = self.address_space_tree.get_cursor();
@@ -208,20 +218,12 @@ impl App {
         false
     }
 
-    pub fn on_connected(&self) {
-        self.update_connection_state(true);
-        self.populate_address_space();
-    }
-
-    pub fn on_disconnected(&self) {
-        self.update_connection_state(false);
-    }
-
     pub fn on_browse_node_result(
         &mut self,
         parent_node_id: NodeId,
         browse_node_result: BrowseResult,
     ) {
+        println!("browse node result");
         // TODO get the parent node in the tree
         // TODO clear any existing children
 
@@ -231,9 +233,14 @@ impl App {
 
             let parent = if parent_node_id == ObjectId::RootFolder.into() {
                 None
+            } else if let Some(iter) = self.address_space_map.get(&parent_node_id) {
+                Some(iter.clone())
             } else {
-                // TODO find parent node in the tree
-                None
+                println!(
+                    "Parent node id {:?} doesn't exist so browse will do nothing",
+                    parent_node_id
+                );
+                return;
             };
 
             // This code only works for root node and needs to be fixed
@@ -246,17 +253,40 @@ impl App {
                     let t = "i=333"; //TODO
                     let values: Vec<&dyn ToValue> = vec![&node_id, &browse_name, &display_name, &t];
 
-                    let i = address_space_model.insert_with_values(
-                        parent,
-                        None,
-                        &[0, 1, 2, 3],
-                        &values,
-                    );
+                    let columns = &[0, 1, 2, 3];
 
+                    // Insert element into tree
+                    let i = if let Some(parent) = parent.clone() {
+                        Self::insert_address_space(
+                            &address_space_model,
+                            Some(&parent),
+                            None,
+                            columns,
+                            &values,
+                        )
+                    } else {
+                        Self::insert_address_space(
+                            &address_space_model,
+                            None,
+                            None,
+                            columns,
+                            &values,
+                        )
+                    };
                     self.address_space_map.insert(r.node_id.node_id.clone(), i);
                 });
             }
         }
+    }
+
+    pub fn insert_address_space(
+        address_space_model: &gtk::TreeStore,
+        parent: Option<&TreeIter>,
+        position: Option<u32>,
+        columns: &[u32],
+        values: &[&dyn ToValue],
+    ) -> TreeIter {
+        address_space_model.insert_with_values(parent, position, columns, &values)
     }
 
     pub fn clear_address_space(&self) {
