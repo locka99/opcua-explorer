@@ -5,7 +5,7 @@ use std::{
 };
 
 use glib::clone;
-use gtk::{self, prelude::*, TreeIter};
+use gtk::{self, prelude::*, TreeIter, TreePath};
 
 use riker::actors::*;
 
@@ -45,6 +45,7 @@ impl ActorFactoryArgs<Arc<Mutex<mpsc::Sender<AppMessage>>>> for AppActor {
 
 pub struct App {
     actor_system: ActorSystem,
+    rx: mpsc::Receiver<AppMessage>,
     builder: Rc<gtk::Builder>,
     model: ActorRef<ModelMessage>,
     toolbar_connect_btn: Rc<gtk::ToolButton>,
@@ -52,7 +53,6 @@ pub struct App {
     address_space_tree: Rc<gtk::TreeView>,
     console_text_view: Rc<gtk::TextView>,
     address_space_map: HashMap<NodeId, gtk::TreeIter>,
-    rx: mpsc::Receiver<AppMessage>,
 }
 
 impl App {
@@ -71,12 +71,16 @@ impl App {
             .actor_of_args::<AppActor, _>("app", Arc::new(Mutex::new(tx)))
             .unwrap();
         let model = actor_system
-            .actor_of_args::<Model, _>("model", app_actor)
+            .actor_of_args::<Model, _>("model", app_actor.clone())
             .unwrap();
 
         // The user interface is defined as a .glade file
         let glade_src = include_str!("ui.glade");
         let builder = Rc::new(gtk::Builder::from_string(glade_src));
+
+        // Main window
+        let main_window: Rc<gtk::ApplicationWindow> =
+            Rc::new(builder.get_object("main_window").unwrap());
 
         let toolbar_connect_btn: Rc<gtk::ToolButton> =
             Rc::new(builder.get_object("toolbar_connect_btn").unwrap());
@@ -92,46 +96,41 @@ impl App {
         let console_text_view: Rc<gtk::TextView> =
             Rc::new(builder.get_object("console_text_view").unwrap());
 
-        // Main window
-        let main_window: Rc<gtk::ApplicationWindow> =
-            Rc::new(builder.get_object("main_window").unwrap());
-
-        let app_rc = Arc::new(RwLock::new(App {
+        let app = Arc::new(RwLock::new(App {
             actor_system,
+            rx,
             builder: builder.clone(),
-            console_text_view,
+            console_text_view: console_text_view.clone(),
             toolbar_connect_btn: toolbar_connect_btn.clone(),
             toolbar_disconnect_btn: toolbar_disconnect_btn.clone(),
             address_space_tree: address_space_tree.clone(),
             address_space_map: HashMap::new(),
             model: model.clone(),
-            rx,
         }));
 
         // Hook up the toolbar buttons
 
         let model_connect = model.clone();
-        toolbar_connect_btn.connect_clicked(clone!(@weak app_rc, @weak builder => move |_| {
-            println!("toolbar_connect_btn click");
-            // Modally show the connect dialog
-            let dlg = NewConnectionDlg::new(model_connect.clone(), builder);
-            dlg.show();
-        }));
+        let _id =
+            toolbar_connect_btn.connect_clicked(clone!(@weak app, @weak builder => move |_| {
+                println!("toolbar_connect_btn click");
+                // Show the connect dialog
+                let dlg = NewConnectionDlg::new(model_connect.clone(), builder);
+                dlg.show();
+            }));
 
         let model_disconnect = model.clone();
-        toolbar_disconnect_btn.connect_clicked(clone!(@weak app_rc => move |_| {
+        let _id = toolbar_disconnect_btn.connect_clicked(clone!(@weak app => move |_| {
             println!("toolbar_disconnect_btn click");
-            let app = app_rc.read().unwrap();
             model_disconnect.tell(ModelMessage::Disconnect, None);
         }));
 
         // Address space
-        address_space_tree.connect_expand_collapse_cursor_row(
-            clone!(@weak app_rc => @default-return false, move |_, logical, expand, open_all| {
+        let _id = address_space_tree.connect_test_expand_row(
+            clone!(@weak app => @default-return Inhibit(false), move |_, iter, path| {
                 println!("address_space_tree expand");
-                let app = app_rc.read().unwrap();
-                app.on_expand_collapse_cursor_row(logical, expand, open_all);
-                true
+                let app = app.read().unwrap();
+                Inhibit(app.address_space_test_expand_row(iter, path))
             }),
         );
 
@@ -140,7 +139,6 @@ impl App {
 
         // Monitored item properties pane
         // TODO
-
         main_window.connect_delete_event(|_, _| {
             println!("Application is closing");
             gtk::main_quit();
@@ -148,39 +146,42 @@ impl App {
         });
 
         {
-            let app = app_rc.read().unwrap();
+            let app = app.read().unwrap();
             app.update_connection_state(false);
             app.console_write("Click Connect... to connect to an OPC UA end point");
         }
 
         glib::idle_add_local(move || {
-            let mut app = app_rc.write().unwrap();
-            let processed_msg = app.handle_messages();
-            Continue(processed_msg)
+            let mut app = app.write().unwrap();
+            let quit = !app.handle_messages();
+            Continue(!quit)
         });
 
         main_window.show_all();
 
+        // Main loop
         gtk::main();
+
+        println!("Finished");
     }
 
     pub fn handle_messages(&mut self) -> bool {
         if let Ok(msg) = self.rx.try_recv() {
+            println!("try_recv msg = #{:?}", msg);
             match msg {
                 AppMessage::Console(message) => self.console_write(&message),
-                AppMessage::Quit => {
-                    return false;
-                }
                 AppMessage::Connected => self.on_connected(),
                 AppMessage::Disconnected => self.on_disconnected(),
                 AppMessage::BrowseNodeResult(parent_node_id, browse_result) => {
                     self.on_browse_node_result(parent_node_id, browse_result)
                 }
+                AppMessage::Quit => {
+                    println!("Application was told to quit");
+                    return false;
+                }
             }
-            true
-        } else {
-            false
         }
+        true
     }
 
     pub fn console_write(&self, message: &str) {
@@ -199,21 +200,14 @@ impl App {
         self.update_connection_state(false);
     }
 
-    pub fn on_expand_collapse_cursor_row(
-        &self,
-        _logical: bool,
-        expand: bool,
-        _open_all: bool,
-    ) -> bool {
-        println!("address space expand cursor row");
-        if expand {
-            // Get tree view cursor
-            let (tree_path, _) = self.address_space_tree.get_cursor();
-            if let Some(tree_path) = tree_path {
-                let idx = tree_path.get_indices();
-                let address_space_model: gtk::TreeStore =
-                    self.builder.get_object("address_space_model").unwrap();
-            }
+    pub fn address_space_test_expand_row(&self, iter: &TreeIter, path: &TreePath) -> bool {
+        println!("address_space_test_expand_row");
+        // Get tree view cursor
+        let (tree_path, _) = self.address_space_tree.get_cursor();
+        if let Some(tree_path) = tree_path {
+            let idx = tree_path.get_indices();
+            let address_space_model: gtk::TreeStore =
+                self.builder.get_object("address_space_model").unwrap();
         }
         false
     }
@@ -257,36 +251,19 @@ impl App {
 
                     // Insert element into tree
                     let i = if let Some(parent) = parent.clone() {
-                        Self::insert_address_space(
-                            &address_space_model,
+                        address_space_model.insert_with_values(
                             Some(&parent),
                             None,
                             columns,
                             &values,
                         )
                     } else {
-                        Self::insert_address_space(
-                            &address_space_model,
-                            None,
-                            None,
-                            columns,
-                            &values,
-                        )
+                        address_space_model.insert_with_values(None, None, columns, &values)
                     };
                     self.address_space_map.insert(r.node_id.node_id.clone(), i);
                 });
             }
         }
-    }
-
-    pub fn insert_address_space(
-        address_space_model: &gtk::TreeStore,
-        parent: Option<&TreeIter>,
-        position: Option<u32>,
-        columns: &[u32],
-        values: &[&dyn ToValue],
-    ) -> TreeIter {
-        address_space_model.insert_with_values(parent, position, columns, &values)
     }
 
     pub fn clear_address_space(&self) {
