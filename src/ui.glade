@@ -4,6 +4,8 @@
   <requires lib="gtk+" version="3.20"/>
   <object class="GtkTreeStore" id="address_space_model">
     <columns>
+      <!-- column-name expandable -->
+      <column type="gboolean"/>
       <!-- column-name node_id -->
       <column type="gchararray"/>
       <!-- column-name browse_name -->
@@ -180,8 +182,8 @@
   <object class="GtkApplicationWindow" id="main_window">
     <property name="can_focus">False</property>
     <property name="title" translatable="yes">OPC UA Explorer</property>
-    <property name="default_width">640</property>
-    <property name="default_height">480</property>
+    <property name="default_width">800</property>
+    <property name="default_height">600</property>
     <child>
       <placeholder/>
     </child>
@@ -236,7 +238,7 @@
             <property name="orientation">vertical</property>
             <child>
               <object class="GtkPaned">
-                <property name="height_request">500</property>
+                <property name="height_request">300</property>
                 <property name="visible">True</property>
                 <property name="can_focus">True</property>
                 <child>
@@ -244,27 +246,41 @@
                     <property name="width_request">200</property>
                     <property name="visible">True</property>
                     <property name="can_focus">True</property>
+                    <property name="hexpand">True</property>
+                    <property name="vexpand">True</property>
                     <property name="expanded">True</property>
                     <child>
-                      <object class="GtkTreeView" id="address_space_tree">
+                      <object class="GtkScrolledWindow">
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
-                        <property name="model">address_space_model</property>
-                        <property name="headers_visible">False</property>
-                        <property name="enable_search">False</property>
-                        <property name="search_column">0</property>
-                        <child internal-child="selection">
-                          <object class="GtkTreeSelection"/>
-                        </child>
+                        <property name="hexpand">True</property>
+                        <property name="vexpand">True</property>
+                        <property name="shadow_type">in</property>
                         <child>
-                          <object class="GtkTreeViewColumn" id="browse_name">
-                            <property name="title" translatable="yes">Browse Name</property>
-                            <property name="clickable">True</property>
+                          <object class="GtkTreeView" id="address_space_tree">
+                            <property name="visible">True</property>
+                            <property name="can_focus">True</property>
+                            <property name="hexpand">False</property>
+                            <property name="vexpand">False</property>
+                            <property name="model">address_space_model</property>
+                            <property name="headers_visible">False</property>
+                            <property name="enable_search">False</property>
+                            <property name="search_column">0</property>
+                            <property name="enable_tree_lines">True</property>
+                            <child internal-child="selection">
+                              <object class="GtkTreeSelection"/>
+                            </child>
                             <child>
-                              <object class="GtkCellRendererText" id="browse_name_col"/>
-                              <attributes>
-                                <attribute name="text">1</attribute>
-                              </attributes>
+                              <object class="GtkTreeViewColumn" id="browse_name">
+                                <property name="title" translatable="yes">Browse Name</property>
+                                <property name="clickable">True</property>
+                                <child>
+                                  <object class="GtkCellRendererText" id="browse_name_col"/>
+                                  <attributes>
+                                    <attribute name="text">2</attribute>
+                                  </attributes>
+                                </child>
+                              </object>
                             </child>
                           </object>
                         </child>
@@ -453,6 +469,8 @@
               <object class="GtkTextView" id="console_text_view">
                 <property name="visible">True</property>
                 <property name="can_focus">True</property>
+                <property name="hexpand">True</property>
+                <property name="vexpand">True</property>
                 <property name="buffer">console_text_buffer</property>
               </object>
             </child>
