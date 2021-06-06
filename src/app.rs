@@ -1,19 +1,20 @@
 use std::{
-    collections::HashMap,
     rc::Rc,
     sync::{mpsc, Arc, Mutex, RwLock},
 };
 
 use glib::clone;
-use gtk::{self, prelude::*, TreeIter, TreePath};
+use gtk::{self, prelude::*};
 
 use riker::actors::*;
 
 use opcua_client::prelude::*;
 
-use crate::model::{Model, ModelMessage};
-use crate::new_connection_dlg::NewConnectionDlg;
-use std::str::FromStr;
+use crate::{
+    address_space_tree_view::*,
+    model::{Model, ModelMessage},
+    new_connection_dlg::NewConnectionDlg,
+};
 
 #[derive(Debug, Clone)]
 pub enum AppMessage {
@@ -45,15 +46,11 @@ impl ActorFactoryArgs<Arc<Mutex<mpsc::Sender<AppMessage>>>> for AppActor {
 }
 
 pub struct App {
-    actor_system: ActorSystem,
     rx: mpsc::Receiver<AppMessage>,
-    builder: Rc<gtk::Builder>,
-    model: ActorRef<ModelMessage>,
     toolbar_connect_btn: Rc<gtk::ToolButton>,
     toolbar_disconnect_btn: Rc<gtk::ToolButton>,
-    address_space_tree: Rc<gtk::TreeView>,
+    address_space_tree: AddressSpaceTreeView,
     console_text_view: Rc<gtk::TextView>,
-    address_space_map: HashMap<NodeId, gtk::TreeIter>,
 }
 
 impl App {
@@ -98,39 +95,33 @@ impl App {
             Rc::new(builder.get_object("console_text_view").unwrap());
 
         let app = Arc::new(RwLock::new(App {
-            actor_system,
             rx,
-            builder: builder.clone(),
             console_text_view: console_text_view.clone(),
             toolbar_connect_btn: toolbar_connect_btn.clone(),
             toolbar_disconnect_btn: toolbar_disconnect_btn.clone(),
-            address_space_tree: address_space_tree.clone(),
-            address_space_map: HashMap::new(),
-            model: model.clone(),
+            address_space_tree: AddressSpaceTreeView::new(builder.clone(), model.clone()),
         }));
 
         // Hook up the toolbar buttons
 
-        let model_connect = model.clone();
         let _id =
-            toolbar_connect_btn.connect_clicked(clone!(@weak app, @weak builder => move |_| {
+            toolbar_connect_btn.connect_clicked(clone!(@strong model, @weak builder => move |_| {
                 println!("toolbar_connect_btn click");
                 // Show the connect dialog
-                let dlg = NewConnectionDlg::new(model_connect.clone(), builder);
+                let dlg = NewConnectionDlg::new(model.clone(), builder);
                 dlg.show();
             }));
 
-        let model_disconnect = model.clone();
-        let _id = toolbar_disconnect_btn.connect_clicked(clone!(@weak app => move |_| {
+        let _id = toolbar_disconnect_btn.connect_clicked(clone!(@strong model => move |_| {
             println!("toolbar_disconnect_btn click");
-            model_disconnect.tell(ModelMessage::Disconnect, None);
+            model.tell(ModelMessage::Disconnect, None);
         }));
 
         // Address space
         let _id =
             address_space_tree.connect_row_expanded(clone!(@weak app => move |_, iter, path| {
                 let app = app.read().unwrap();
-                app.address_view_row_expanded(iter, path);
+                app.address_space_tree.row_expanded(iter, path);
             }));
 
         // Monitored item pane
@@ -192,7 +183,7 @@ impl App {
 
     pub fn on_connected(&self) {
         self.update_connection_state(true);
-        self.populate_address_space();
+        self.address_space_tree.populate();
     }
 
     pub fn on_disconnected(&self) {
@@ -204,202 +195,8 @@ impl App {
         parent_node_id: NodeId,
         browse_node_result: BrowseResult,
     ) {
-        println!("browse node result");
-
-        // TODO get the parent node in the tree
-        // TODO clear any existing children
-
-        if browse_node_result.status_code.is_good() {
-            let address_space_model: gtk::TreeStore =
-                self.builder.get_object("address_space_model").unwrap();
-
-            let parent = if parent_node_id == ObjectId::RootFolder.into() {
-                None
-            } else if let Some(iter) = self.address_space_map.get(&parent_node_id) {
-                if !Self::remove_address_space_dummy_node(&address_space_model, iter) {
-                    println!(
-                        "Parent node doesn't have a dummy node, so maybe this is a race condition"
-                    );
-                    return;
-                }
-                Some(iter.clone())
-            } else {
-                println!(
-                    "Parent node id {:?} doesn't exist so browse will do nothing",
-                    parent_node_id
-                );
-                return;
-            };
-
-            // This code only works for root node and needs to be fixed
-            if let Some(references) = browse_node_result.references {
-                references.iter().for_each(|r| {
-                    self.insert_address_space_reference(&address_space_model, r, parent.clone());
-                });
-            }
-        }
-    }
-
-    const COL_DUMMY: u32 = 0;
-    const COL_NODE_ID: u32 = 1;
-    const COL_BROWSE_NAME: u32 = 2;
-    const COL_DISPLAY_NAME: u32 = 3;
-    const COL_REFERENCE_TYPE_ID: u32 = 4;
-
-    pub fn address_view_row_expanded(&self, iter: &TreeIter, path: &TreePath) -> bool {
-        println!("address_view_row_expanded");
-
-        let address_space_model: gtk::TreeStore =
-            self.builder.get_object("address_space_model").unwrap();
-
-        if Self::has_address_space_dummy_node(&address_space_model, iter) {
-            let v = address_space_model.get_value(iter, Self::COL_NODE_ID as i32);
-            if let Ok(Some(node_id)) = v.get::<String>() {
-                println!("Getting nodes organized by {:?}", node_id);
-                let node_id = NodeId::from_str(&node_id).unwrap();
-                // Initiate a browse on the node
-                self.model.tell(ModelMessage::BrowseNode(node_id), None)
-            } else {
-                println!("Cannot get node id from iterator {:?}", iter);
-                println!("Node id Value = {:?}", v);
-            }
-        }
-        false
-    }
-
-    fn insert_address_space_reference(
-        &mut self,
-        address_space_model: &gtk::TreeStore,
-        r: &ReferenceDescription,
-        parent: Option<TreeIter>,
-    ) {
-        println!("Result = {:?}", r);
-        let dummy_node = false;
-        let node_id = format!("{}", r.node_id.node_id);
-        let browse_name = format!("{}", r.browse_name.name);
-        let display_name = format!("{}", r.display_name);
-        let reference_type_id = format!("{}", r.reference_type_id);
-
-        let columns = &[
-            Self::COL_DUMMY,
-            Self::COL_NODE_ID,
-            Self::COL_BROWSE_NAME,
-            Self::COL_DISPLAY_NAME,
-            Self::COL_REFERENCE_TYPE_ID,
-        ];
-        let values: Vec<&dyn ToValue> = vec![
-            &dummy_node,
-            &node_id,
-            &browse_name,
-            &display_name,
-            &reference_type_id,
-        ];
-
-        // Insert element into tree
-        let i = if let Some(parent) = parent.clone() {
-            let parent = Some(&parent);
-            Self::insert_with_values(address_space_model, parent, None, columns, &values)
-        } else {
-            Self::insert_with_values(address_space_model, None, None, columns, &values)
-        };
-
-        // Insert a dummy node under the reference
-        Self::insert_address_space_dummy_node(address_space_model, i.clone());
-
-        println!("Adding mapping between {:?} and {:?}", r.node_id.node_id, i);
-
-        self.address_space_map
-            .insert(r.node_id.node_id.clone(), i.clone());
-    }
-
-    fn insert_address_space_dummy_node(
-        address_space_model: &gtk::TreeStore,
-        parent: TreeIter,
-    ) -> TreeIter {
-        let dummy_node = true;
-        let node_id = "";
-        let browse_name = "";
-        let display_name = "";
-        let reference_type_id = "";
-        let columns = &[
-            Self::COL_DUMMY,
-            Self::COL_NODE_ID,
-            Self::COL_BROWSE_NAME,
-            Self::COL_DISPLAY_NAME,
-            Self::COL_REFERENCE_TYPE_ID,
-        ];
-        let values: Vec<&dyn ToValue> = vec![
-            &dummy_node,
-            &node_id,
-            &browse_name,
-            &display_name,
-            &reference_type_id,
-        ];
-
-        Self::insert_with_values(address_space_model, Some(&parent), None, columns, &values)
-    }
-
-    fn has_address_space_dummy_node(
-        address_space_model: &gtk::TreeStore,
-        parent: &TreeIter,
-    ) -> bool {
-        if let Some(child_iter) = address_space_model.iter_children(Some(parent)) {
-            let v = address_space_model.get_value(&child_iter, Self::COL_DUMMY as i32);
-            let mut next_iter = true;
-            while next_iter {
-                if let Ok(Some(is_dummy)) = v.get::<bool>() {
-                    if is_dummy {
-                        return true;
-                    }
-                }
-                next_iter = address_space_model.iter_next(&child_iter);
-            }
-        }
-        false
-    }
-
-    fn remove_address_space_dummy_node(
-        address_space_model: &gtk::TreeStore,
-        parent: &TreeIter,
-    ) -> bool {
-        if let Some(child_iter) = address_space_model.iter_children(Some(parent)) {
-            let v = address_space_model.get_value(&child_iter, Self::COL_DUMMY as i32);
-            let mut next_iter = true;
-            while next_iter {
-                if let Ok(Some(is_dummy)) = v.get::<bool>() {
-                    if is_dummy {
-                        // Remove the element
-                        address_space_model.remove(&child_iter);
-                        return true;
-                    }
-                }
-                next_iter = address_space_model.iter_next(&child_iter);
-            }
-        }
-
-        false
-    }
-
-    fn insert_with_values(
-        address_space_model: &gtk::TreeStore,
-        parent: Option<&TreeIter>,
-        position: Option<u32>,
-        columns: &[u32],
-        values: &[&dyn ToValue],
-    ) -> TreeIter {
-        address_space_model.insert_with_values(parent, position, columns, &values)
-    }
-
-    pub fn clear_address_space(&self) {
-        let address_space_model: gtk::TreeStore =
-            self.builder.get_object("address_space_model").unwrap();
-        address_space_model.clear();
-    }
-
-    pub fn populate_address_space(&self) {
-        self.clear_address_space();
-        self.model
-            .send_msg(ModelMessage::BrowseNode(ObjectId::RootFolder.into()), None);
+        self.address_space_tree
+            .on_browse_node_result(parent_node_id, browse_node_result);
     }
 
     pub fn update_connection_state(&self, is_connected: bool) {

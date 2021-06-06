@@ -107,7 +107,7 @@ impl Model {
                     let mut session = session.write().unwrap();
                     session.set_connection_status_callback(ConnectionStatusCallback::new(
                         |connected| {
-                            println!("Connection status change TODO");
+                            println!("Connection status change connected = {:?}", connected);
                         },
                     ));
                 }
@@ -144,10 +144,10 @@ impl Model {
             let browse_description = BrowseDescription {
                 node_id: parent_node_id.clone(),
                 browse_direction: BrowseDirection::Forward,
-                reference_type_id: ReferenceTypeId::Organizes.into(),
+                reference_type_id: ReferenceTypeId::HierarchicalReferences.into(),
                 include_subtypes: true,
-                node_class_mask: 0xff,
-                result_mask: 0xff,
+                node_class_mask: 0x0,
+                result_mask: 0x3f,
             };
             if let Ok(results) = session.browse(&[browse_description]) {
                 if let Some(mut results) = results {

@@ -165,6 +165,23 @@
       </object>
     </child>
   </object>
+  <object class="GtkListStore" id="properties_model">
+    <columns>
+      <!-- column-name Name -->
+      <column type="gchararray"/>
+      <!-- column-name Value -->
+      <column type="gchararray"/>
+      <!-- column-name Editable -->
+      <column type="gboolean"/>
+    </columns>
+    <data>
+      <row>
+        <col id="0" translatable="yes">Test1</col>
+        <col id="1" translatable="yes">100</col>
+        <col id="2">False</col>
+      </row>
+    </data>
+  </object>
   <object class="GtkListStore" id="subscription_model">
     <columns>
       <!-- column-name subscription_id -->
@@ -396,6 +413,7 @@
                           <object class="GtkTreeView" id="properties">
                             <property name="visible">True</property>
                             <property name="can_focus">True</property>
+                            <property name="model">properties_model</property>
                             <child internal-child="selection">
                               <object class="GtkTreeSelection"/>
                             </child>
